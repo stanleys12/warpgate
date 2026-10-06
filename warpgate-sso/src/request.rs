@@ -94,12 +94,20 @@ pub async fn map_sso_result(
                 extract_groups(
                     &result,
                     config.roles_claim(),
-                    config.role_mappings().is_some(),
+                    if config.role_mappings().is_some() {
+                        MissingClaim::AssumeEmpty
+                    } else {
+                        MissingClaim::Ignore
+                    },
                 ),
                 extract_groups(
                     &result,
                     config.admin_roles_claim(),
-                    config.admin_role_mappings().is_some(),
+                    if config.admin_role_mappings().is_some() {
+                        MissingClaim::Warn
+                    } else {
+                        MissingClaim::Ignore
+                    },
                 ),
             ),
             Err(e) => {
@@ -119,7 +127,18 @@ pub async fn map_sso_result(
     }
 }
 
-fn extract_groups(result: &SsoResult, claim: &str, warn_if_missing: bool) -> Option<Vec<String>> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MissingClaim {
+    Ignore,
+    Warn,
+    AssumeEmpty,
+}
+
+fn extract_groups(
+    result: &SsoResult,
+    claim: &str,
+    if_missing: MissingClaim,
+) -> Option<Vec<String>> {
     let userinfo_claims = result
         .userinfo_claims
         .as_ref()
@@ -131,9 +150,14 @@ fn extract_groups(result: &SsoResult, claim: &str, warn_if_missing: bool) -> Opt
         .get(claim)
         .or_else(|| userinfo_claims.and_then(|c| c.get(claim)))
     else {
-        if warn_if_missing {
+        if if_missing != MissingClaim::Ignore {
+            let consequence = if if_missing == MissingClaim::AssumeEmpty {
+                "assuming no roles, mapped roles will be removed"
+            } else {
+                "roles will not be synced"
+            };
             warn!(
-                "Claim {claim:?} not found - roles will not be synced. ID token claims: {:?}, userinfo claims: {:?}",
+                "Claim {claim:?} not found - {consequence}. ID token claims: {:?}, userinfo claims: {:?}",
                 result
                     .claims
                     .additional_claims()
@@ -143,7 +167,9 @@ fn extract_groups(result: &SsoResult, claim: &str, warn_if_missing: bool) -> Opt
                 userinfo_claims.map(|c| c.keys().collect::<Vec<_>>()),
             );
         }
-        return None;
+        // Some providers (e.g. Keycloak) omit an empty multivalued claim
+        // instead of sending an empty list
+        return (if_missing == MissingClaim::AssumeEmpty).then(Vec::new);
     };
     match serde_json::from_value::<GroupClaim>(raw.clone()) {
         Ok(claim) => Some(flatten_group_claim(claim)),
@@ -151,5 +177,53 @@ fn extract_groups(result: &SsoResult, claim: &str, warn_if_missing: bool) -> Opt
             warn!("Claim {claim:?} is not a list of role names, ignoring: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use data_encoding::BASE64URL_NOPAD;
+    use serde_json::json;
+
+    use super::{MissingClaim, extract_groups};
+    use crate::SsoResult;
+
+    fn sso_result() -> SsoResult {
+        let claims = json!({
+            "iss": "https://idp.example.com",
+            "aud": "warpgate",
+            "sub": "user",
+            "exp": 4_000_000_000_u64,
+            "iat": 0,
+        });
+
+        let token = format!(
+            "{}.{}.AA",
+            BASE64URL_NOPAD.encode(br#"{"alg":"RS256"}"#),
+            BASE64URL_NOPAD.encode(claims.to_string().as_bytes()),
+        );
+        SsoResult {
+            token: token.parse().unwrap(),
+            claims: serde_json::from_value(claims).unwrap(),
+            userinfo_claims: None,
+        }
+    }
+
+    #[test]
+    fn missing_claim_means_no_roles_when_mappings_are_configured() {
+        let result = sso_result();
+        assert_eq!(
+            extract_groups(&result, "warpgate_roles", MissingClaim::AssumeEmpty),
+            Some(vec![])
+        );
+    }
+
+    #[test]
+    fn missing_claim_is_ignored_without_mappings() {
+        let result = sso_result();
+        assert_eq!(
+            extract_groups(&result, "warpgate_roles", MissingClaim::Ignore),
+            None
+        );
     }
 }
