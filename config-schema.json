@@ -675,7 +675,7 @@
               }
             },
             "roles_claim": {
-              "description": "OIDC claim to read group memberships from (e.g. \"groups\").\nIts values are mapped to roles via role_mappings / admin_role_mappings.\nWhen unset, the warpgate_roles / warpgate_admin_roles claims are used.",
+              "description": "OIDC claim to read group memberships from (e.g. \"groups\").\nIts values are mapped to roles via role_mappings / admin_role_mappings.\nWhen unset, the warpgate_roles / warpgate_admin_roles claims are used.\nIf role_mappings is set, a missing claim is treated as no roles.",
               "type": [
                 "string",
                 "null"

@@ -163,6 +163,7 @@ pub enum SsoInternalProviderConfig {
         /// OIDC claim to read group memberships from (e.g. "groups").
         /// Its values are mapped to roles via role_mappings / admin_role_mappings.
         /// When unset, the warpgate_roles / warpgate_admin_roles claims are used.
+        /// If role_mappings is set, a missing claim is treated as no roles.
         roles_claim: Option<String>,
         admin_roles_claim: Option<String>,
         additional_trusted_audiences: Option<Vec<String>>,
